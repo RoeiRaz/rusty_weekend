@@ -4,7 +4,7 @@ rust:
   - beta
   - nightly
 env:
-  - TEST_DIR=
+  - TEST_DIR=linked_list
 matrix:
   allow_failures:
     - rust: nightly
