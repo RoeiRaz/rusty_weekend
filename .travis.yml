@@ -3,7 +3,11 @@ rust:
   - stable
   - beta
   - nightly
+env:
+  - TEST_DIR=
 matrix:
   allow_failures:
     - rust: nightly
   fast_finish: true
+script: 
+  - cd $TEST_DIR && cargo test
