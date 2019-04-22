@@ -1,62 +1,78 @@
-/*
- * BSD 2-Clause License
- *
- * Copyright (c) @year, Roei Rosenzweig
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- *  Redistributions of source code must retain the above copyright notice, this
- *   list of conditions and the following disclaimer.
- *
- *  Redistributions in binary form must reproduce the above copyright notice,
- *   this list of conditions and the following disclaimer in the documentation
- *   and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-
 mod diff;
 extern crate clap;
 
 use diff::DiffScript;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Lines, BufRead, BufReader, Write};
-use clap::{App, Arg};
+use clap::{App, Arg, ArgGroup, ArgMatches};
+use std::process::exit;
+use serde::Deserialize;
 
+#[cfg(windows)]
+const LINE_ENDING: &'static str = "\r\n";
+#[cfg(not(windows))]
+const LINE_ENDING: &'static str = "\n";
 
-fn main() {
-    let arg_matches;
-    let app;
+fn subcommand_compute(arg_matches: &ArgMatches) {
     let original_file;
     let target_file;
-    let mut result_file;
-
-    app = App::new("diff")
-        .arg(Arg::with_name("original_file").short("o").required(true).index(1))
-        .arg(Arg::with_name("target_file").short("t").required(true).index(2))
-        .arg(Arg::with_name("result_file").short("r").required(false).default_value("diff"));
-
-    arg_matches = app.get_matches();
+    let diff_script_encoding;
 
     original_file = File::open(arg_matches.value_of("original_file").unwrap()).unwrap();
     target_file = File::open(arg_matches.value_of("target_file").unwrap()).unwrap();
-    result_file = File::create(arg_matches.value_of("result_file").unwrap()).unwrap();
 
     let mut original: Vec<String> = BufReader::new(original_file).lines()
         .map(|x| x.unwrap()).collect();
     let mut target: Vec<String> = BufReader::new(target_file).lines()
         .map(|x| x.unwrap()).collect();
 
-    result_file.write(serde_json::to_string(&diff::diff(original, target)).unwrap().as_bytes());
+    diff_script_encoding = serde_json::to_string(&diff::diff(original, target)).unwrap();
+
+    match arg_matches.value_of("patch_file") {
+        Some(p) => {File::create(p).unwrap().write(diff_script_encoding.as_bytes());},
+        _ => println!("{}", diff_script_encoding)
+    };
+}
+
+fn subcommand_patch(arg_matches: &ArgMatches) {
+    let original_file = File::open(arg_matches.value_of("original_file").unwrap()).unwrap();
+    let patch_file = File::open(arg_matches.value_of("patch_file").unwrap()).unwrap();
+    let mut result_file = File::create(arg_matches.value_of("result_file")
+        .unwrap_or(&arg_matches.value_of("original_file").unwrap())).unwrap();
+    let reader = BufReader::new(patch_file);
+    let diff_script: DiffScript<String> = serde_json::from_reader(reader).unwrap();
+    let original_lines: Vec<String> = BufReader::new(original_file).lines()
+        .map(|x| x.unwrap()).collect();
+    let patched_content = diff_script.apply_copy(&original_lines).join(LINE_ENDING);
+    result_file.write(patched_content.as_bytes());
+}
+
+fn main() {
+    let arg_matches;
+    let mut app: App;
+    let mut merge_subcmd: App;
+    let mut diff_subcmd: App;
+    let mut patch_subcmd: App;
+
+    diff_subcmd = App::new("compute")
+        .arg(Arg::with_name("original_file").short("o").required(true).index(1))
+        .arg(Arg::with_name("target_file").short("t").required(true).index(2))
+        .arg(Arg::with_name("patch_file").short("p").required(false));
+
+    patch_subcmd = App::new("patch")
+        .arg(Arg::with_name("original_file").short("o").required(true).index(1))
+        .arg(Arg::with_name("patch_file").short("p").required(true).index(2).default_value("diff"))
+        .arg(Arg::with_name("result_file").short("p").required(false).index(3));
+
+    app = App::new("diff").version("0.0.1-ghostly")
+        .subcommand(diff_subcmd).subcommand(patch_subcmd);
+
+    arg_matches = app.get_matches();
+
+    match arg_matches.subcommand() {
+        ("compute", Some(arg_matches)) => subcommand_compute(arg_matches),
+        ("patch", Some(arg_matches)) => subcommand_patch(arg_matches),
+        _ => {println!("{}", arg_matches.usage()); exit(1);}
+    };
+
 }
